@@ -9,6 +9,7 @@ module.exports = class SeasonPlayer extends Model {
   }
 
   url() {
+    // Same as the list returned from `/${this.league}/league/${this.season.slug}/Season1/standings.json`
     return `/${this.league}/league/${this.season.slug}/Season1/standings/${this.playerId}.json`;
   }
 }

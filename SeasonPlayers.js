@@ -1,6 +1,6 @@
 const Model = require('./Model');
 
-module.exports = class Season extends Model {
+module.exports = class SeasonPlayers extends Model {
   constructor(league, season) {
     super()
     this.league = league;
@@ -13,7 +13,7 @@ module.exports = class Season extends Model {
 
   summary() {
     if (!this.data) {
-      return `Season: ${this.season.title}\nPlayers:\n\t_none_`;
+      return `SeasonPlayers: ${this.season.title}\nPlayers:\n\t_none_`;
     }
 
     const count = Object.keys(this.data).length;

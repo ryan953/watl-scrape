@@ -1,6 +1,6 @@
 const Model = require('./Model');
 
-module.exports = class EventList extends Model {
+module.exports = class Seasons extends Model {
   constructor(league) {
     super();
     this.league = league
@@ -10,11 +10,15 @@ module.exports = class EventList extends Model {
     return `/${this.league}/event-list/league.json`;
   }
 
-  titles() {
-    return Object.values(this.data).map((event) => event.title);
+  seasonIds() {
+    return Object.keys(this.data);
   }
 
-  events() {
+  seasons() {
     return Object.values(this.data);
+  }
+
+  titles() {
+    return Object.values(this.data).map((event) => event.title);
   }
 }

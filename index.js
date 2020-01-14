@@ -1,54 +1,152 @@
+const fs = require('fs');
 const Api = require('./Api');
 
-const EventList = require('./EventList');
-const Season = require('./Season');
+const Seasons = require('./Seasons');
+const SeasonPlayers = require('./SeasonPlayers');
 const SeasonPlayer = require('./SeasonPlayer');
 const GlobalPlayer = require('./GlobalPlayer');
 const SeasonGames = require('./SeasonGames');
 const GameData = require('./GameData');
 
-const league = 'bad-axe-throwing-san-francisco-ca';
+const _USE_CACHE_ = true; // 'refresh', false
+const _LEAGUE_ = 'bad-axe-throwing-san-francisco-ca';
+
+class DataType {
+  constructor(name) {
+    this.name = name;
+    this.itemsById = {};
+    // this.ids = new Set();
+  }
+
+  insert(item) {
+    if (!item.id) {
+      console.log('Missing item.id: unable to insert', item);
+      return;
+    }
+    if (this.itemsById[item.id]) {
+      console.log('Existing item.id: unable to replace', item);
+      return;
+    }
+
+    this.itemsById[item.id] = item;
+    // this.ids.add(item.id);
+  }
+
+  get length() {
+    return Object.keys(this.itemsById).length;
+  }
+}
+
+async function get(url) {
+  if (_USE_CACHE_) {
+    if (_USE_CACHE_ === 'refresh') {
+      Api.clear(url);
+    }
+    return await Api.cacheGet(url);
+  } else {
+    return Api.get(url);
+  }
+}
+
+// Players Per Season
+// derek b = -LbUOerFpbCj8FW2aeRf
+// shishir = -LbYjzJEulG9j2T0tcvx
+// ryan    = -LbYjzJG27JyOPcElK8W
+
+const datamart = {
+  location: new DataType('location'),
+  globalPlayer: new DataType('globalPlayer'),
+  season: new DataType('season'),
+  seasonPlayer: new DataType('seasonPlayer'),
+  game: new DataType('game'),
+  // gameStats: new DataType('gameStats'),
+};
 
 async function main() {
   // Api.clearCache();
 
   // Get list of season for this League:
-  const eventList = new EventList(league);
-  await eventList.get({cache: true});
+  const seasons = await get(new Seasons(_LEAGUE_).url());
+
+  datamart.location.insert({
+    id: _LEAGUE_,
+    seasons: Object.keys(seasons),
+  });
 
   // Fetch summary season Standing records:
-  const seasons = eventList.events().map((season) => new Season(league, season));
-  await Promise.all(seasons.map((season) => season.get({cache: true})));
+  await Promise.all(
+    Object.entries(seasons).map(async ([seasonId, seasonData]) => {
+      const seasonPlayers = await get(new SeasonPlayers(_LEAGUE_, seasonData).url());
 
-  // Fetch global player stats records:
-  const playerIds = seasons.map((season) => season.playerIds());
-  const globalPlayerIds = Array.from(new Set(playerIds.reduce((s, ids) => s.concat(ids), [])));
-  const globalPlayers = globalPlayerIds.map((playerId) => new GlobalPlayer(playerId));
-  await Promise.all(globalPlayers.map((globalPlayer) => globalPlayer.get({cache: true})));
+      datamart.season.insert({
+        id: seasonId,
+        seasonData: seasonData,
+        seasonPlayers: Object.keys(seasonPlayers || {}),
+        gameIds: new Set(),
+      });
 
-  // For each Season...
-  seasons.forEach(async (season) => {
-    // Get the players stats for the eason
-    const seasonPlayerIds = season.playerIds();
-    const seasonPlayers = seasonPlayerIds.map((playerId) => new SeasonPlayer(league, season.season, playerId));
-    await Promise.all(seasonPlayers.map((seasonPlayer) => seasonPlayer.get({cache: true})));
+      await Promise.all(
+        Object.entries(seasonPlayers || {}).map(async ([playerId, seasonPlayerData]) => {
+          if (seasonPlayerData.score === 0) {
+            return;
+          }
 
-    // Get the list of games that were played
-    const seasonGamesList = seasonPlayerIds.map((playerId) => new SeasonGames(season.season, playerId));
-    await Promise.all(seasonGamesList.map((seasonGames) => seasonGames.get({cache: true})));
+          // Global player may have been inserted already...
+          const globalPlayer = await get(new GlobalPlayer(playerId).url());
+          datamart.globalPlayer.insert({
+            id: playerId,
+            globalPlayerData: globalPlayer,
+            seasonIds: new Set(),
+            gameIds: new Set(),
+          });
 
-    // Get the axes thrown for each game played
-    const gameDataList2 = seasonGamesList.map(async (seasonGames) => {
-      const gameDataList = seasonGames.toList().map(({season, seasonID, weekID, gameID}) =>
-        new GameData(league, season, seasonID, weekID, gameID)
+          const seasonPlayerId = `${seasonId} ${playerId}`;
+          datamart.globalPlayer.itemsById[playerId].seasonIds.add(seasonPlayerId);
+          datamart.seasonPlayer.insert({
+            id: seasonPlayerId,
+            seasonId: seasonId,
+            playerId: playerId,
+            seasonPlayerData: seasonPlayerData,
+            gameIds: new Set(),
+          });
+
+          const seasonGames = await get(new SeasonGames(seasonData, playerId).url());
+
+          await Promise.all(
+            Object.entries(seasonGames || {}).map(async ([gameId, gameMeta]) => {
+              const gameScores = await get(new GameData(_LEAGUE_, seasonData, gameMeta.seasonID, gameMeta.weekID, gameId).url());
+
+              if (datamart.game.itemsById[gameId]) {
+                datamart.game.itemsById[gameId].gameMeta2 = gameMeta;
+              } else {
+                datamart.game.insert({
+                  id: gameId,
+                  seasonId: seasonId,
+                  gameMeta1: gameMeta,
+                  gameMeta2: null,
+                  gameScores: gameScores,
+                });
+              }
+
+              datamart.globalPlayer.itemsById[playerId].gameIds.add(gameId);
+              datamart.season.itemsById[seasonId].gameIds.add(gameId);
+              datamart.seasonPlayer.itemsById[seasonPlayerId].gameIds.add(gameId);
+            })
+          );
+        })
       );
-      await Promise.all(gameDataList.map(async (gameData) => gameData.get({cache: true})));
-
-      return gameDataList;
-    });
-  });
+    })
+  );
 }
 
-main();
+main().then(() => {
+  function Set_toJSON(key, value) {
+    if (typeof value === 'object' && value instanceof Set) {
+      return [...value];
+    }
+    return value;
+  }
 
-// ryan = LdHWIgqU5VuNdMW7Xgq
+  fs.mkdirSync('./output', {recursive: true});
+  fs.writeFileSync('./output/datamart.json', JSON.stringify(datamart, Set_toJSON, '\t'));
+});
